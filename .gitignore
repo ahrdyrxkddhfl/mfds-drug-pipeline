@@ -1,0 +1,35 @@
+# 환경변수 (API 키!)
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.Python
+venv/
+.venv/
+env/
+
+# 데이터 파일
+data/
+*.csv
+*.parquet
+*.json.gz
+
+# 로그
+logs/
+*.log
+
+# Airflow
+airflow.db
+airflow-webserver.pid
+standalone_admin_password.txt
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
