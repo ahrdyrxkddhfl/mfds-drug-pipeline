@@ -14,14 +14,22 @@ import psycopg
 from src.config import config
 
 @contextmanager
-def get_connection() -> Iterator[psycopg.Connection]:
+def get_connection(autocommit: bool = False) -> Iterator[psycopg.Connection]:
     """DB 연결을 열고 블록 종료 시 정리한다.
 
+    autocommit 연결을 따로 둘 수 있게 한 이유는 이력 기록 때문이다.
+    적재 트랜잭션과 같은 연결로 이력을 쓰면, 적재가 실패해 롤백될 때
+    실패했다는 기록까지 함께 사라진다.
+
+    Args:
+        autocommit (bool): True면 문장마다 즉시 커밋한다. 적재 트랜잭션과
+            무관하게 남아야 하는 이력 기록용이다. 기본값은 False.
+
     Yields:
-        psycopg.Connection: 열린 커넥션. 블록을 정상적으로 벗어나면 커밋되고,
-            예외가 발생하면 롤백된다.
+        psycopg.Connection: 열린 커넥션. autocommit이 False이면 블록을
+            정상적으로 벗어날 때 커밋되고, 예외가 발생하면 롤백된다.
     """
-    conn = psycopg.connect(config.db_dsn())
+    conn = psycopg.connect(config.db_dsn(), autocommit=autocommit)
     try:
         yield conn
         conn.commit()

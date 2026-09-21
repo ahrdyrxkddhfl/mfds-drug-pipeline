@@ -9,7 +9,7 @@ API를 다시 전량 호출해야 한다. 일일 트래픽 한도가 있는 공�
 import json
 import logging
 import uuid
-from datatime import datetime, timezone
+from datetime import datetime, timezone
 
 import psycopg
 
@@ -24,7 +24,8 @@ def start_batch(conn: psycopg.Connection, source: str, total_count: int) -> uuid
     완료 후에만 기록하면 실패한 실행은 흔적 없이 사라진다.
 
     Args:
-        conn (psycopg.Connection): 열린 DB 커넥션.
+        conn (psycopg.Connection): autocommit 커넥션. 적재 트랜잭션과
+            분리되어 있어야 실패 시에도 이 행이 남는다.
         source (str): 데이터 소스 구분자. permit 또는 recall.
         total_count (int): API가 보고한 전체 레코드 수.
 
@@ -53,10 +54,10 @@ def finish_batch(
     """배치 종료 상태를 기록한다.
 
     Args:
-        conn (psycopg.Connection): 열린 DB 커넥션.
+        conn (psycopg.Connection): autocommit 커넥션.
         batch_id (uuid.UUID): 대상 배치 식별자.
         status (str): success 또는 failed.
-        fetched_count(int): 실제로 수집한 레코드 수.
+        fetched_count (int): 실제로 수집한 레코드 수.
         error_message (str | None): 실패 시 오류 내용.
     """
     with conn.cursor() as cur:
@@ -103,17 +104,28 @@ def save_page(
         )
     return len(items)
 
-def ingest_all(conn: psycopg.Connection, base_url: str, source: str) -> uuid.UUID:
+def ingest_all(
+        conn: psycopg.Connection,
+        log_conn: psycopg.Connection,
+        base_url: str,
+        source: str,
+) -> uuid.UUID:
     """전체 페이지를 순회하며 raw 테이블에 적재한다.
 
     페이지마다 커밋하지 않고 배치 전체를 하나의 트랜잭션으로 처리한다.
     중간에 실패하면 부분 적재분이 남지 않으므로, 재실행 시 중복을 걱정할 필요가 없다.
 
+    적재와 이력은 서로 다른 연결로 쓴다. 적재는 전부 아니면 전무여야 하지만
+    이력은 실패했을 때 더더욱 남아야 하기 때문이다.
+    success는 적재 커밋이 끝난 뒤에 기록한다. 순서가 반대면 이력은 성공인데
+    데이터는 없는 상태가 생길 수 있다.
+
     Args:
-        conn (psycopg.Connection): 열린 DB 커넥션.
+        conn (psycopg.Connection): 적재용 커넥션. 이 함수가 커밋 시점을 정한다.
+        log_conn (psycopg.Connection): 이력 기록용 autocommit 커넥션.
         base_url (str): API 요청주소.
         source (str): 데이터 소스 구분자.
-    
+
     Returns:
         uuid.UUID: 이번 배치의 식별자.
 
@@ -122,7 +134,7 @@ def ingest_all(conn: psycopg.Connection, base_url: str, source: str) -> uuid.UUI
     """
     total_count = fetch_total_count(base_url)
     total_pages = -(-total_count // PAGE_SIZE)
-    batch_id = start_batch(conn, source, total_count)
+    batch_id = start_batch(log_conn, source, total_count)
 
     logger.info("배치 시작 (source=%s, total=%d, pages=%d)", source, total_count, total_pages)
 
@@ -134,11 +146,13 @@ def ingest_all(conn: psycopg.Connection, base_url: str, source: str) -> uuid.UUI
 
             if page_no % 50 == 0 or page_no == total_pages:
                 logger.info("진행 %d/%d (%d건)", page_no, total_pages, fetched)
+        conn.commit()
     except Exception as exc:
-        finish_batch(conn, batch_id), "failed", fetched, str(exc))
+        conn.rollback()
+        finish_batch(log_conn, batch_id, "failed", fetched, str(exc))
         raise
 
-    finish_batch(conn, batch_id, "success", fetched)
+    finish_batch(log_conn, batch_id, "success", fetched)
 
     # API가 보고한 건수와 실제 수집 건수가 다르면 페이지 누락을 의심해야 한다.
     # 수집 도중 원본에 레코드가 추가되는 경우에도 발생할 수 있다.
