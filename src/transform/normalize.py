@@ -118,6 +118,56 @@ def split_multi(value: object, sep: str) -> list[str]:
     return [part for part in (clean_text(p) for p in text.split(sep)) if part]
 
 
+_OPENERS = {"(": ")", "[": "]"}
+
+
+def split_ingredients(value: object) -> list[str]:
+    """성분명 문자열을 성분 목록으로 나눈다.
+
+    구분자는 /이지만 성분명 안에도 /가 들어 있어 단순 분할하면 한 성분이 여러 조각이 난다.
+    실데이터에서 확인한 두 가지 경우는 구분자로 보지 않는다.
+
+        - 괄호 안의 /: Teriparatide (rDNA/ Host:E.coli ...), 백신 균주명 [A/Darwin/1415/2025]
+        - 뒤에 공백이 붙은 /: Blood Coagulation Factor VIII/ Rurioctocog Alpha Pegol (rDNA)
+          이 이름이 두 번 나열된 레코드의 원본 성분 수가 2여서, /+공백은 이름의 일부로 판단했다.
+
+    괄호 밖에서 공백 없이 쓰인 /는 여전히 구분자로 본다. 그래서 N/S-Diacetylcysteine처럼
+    괄호 없이 이름 안에 /가 있는 성분은 잘못 나뉜다. 이를 가려낼 기준이 없어 규칙을 더 넓히지 않고,
+    원본 성분 수와 대조하는 검증 규칙이 잡아내도록 둔다.
+
+    순서와 중복은 원본 그대로 유지한다(split_multi 참고).
+
+    Args:
+        value (object): 원본 성분명 문자열.
+
+    Returns:
+        list[str]: 성분명 목록. 빈 조각은 버린다. 값이 비어 있으면 빈 리스트.
+    """
+    text = clean_text(value)
+    if text is None:
+        return []
+
+    parts: list[str] = []
+    buf: list[str] = []
+    closers: list[str] = []
+
+    for i, ch in enumerate(text):
+        if ch in _OPENERS:
+            closers.append(_OPENERS[ch])
+        elif closers and ch == closers[-1]:
+            closers.pop()
+
+        next_is_space = i + 1 < len(text) and text[i + 1].isspace()
+        if ch == "/" and not closers and not next_is_space:
+            parts.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    parts.append("".join(buf))
+
+    return [part for part in (clean_text(p) for p in parts) if part]
+
+
 def split_parentheses(text: str) -> tuple[str, list[str]]:
     """문자열을 괄호 밖 부분과 최상위 괄호 안 내용들로 나눈다.
 

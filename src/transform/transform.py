@@ -27,6 +27,7 @@ from src.transform.normalize import (
     parse_date,
     parse_int,
     parse_yn,
+    split_ingredients,
     split_multi,
 )
 
@@ -219,7 +220,7 @@ def parse_permit(payload: dict, issues: IssueCollector) -> dict | None:
         "prduct_prmisn_no": clean_text(payload.get("PRDUCT_PRMISN_NO")),
         "ingr_cnt_raw": issues.convert(parse_int, payload.get("ITEM_INGR_CNT"),
                                        "ITEM_INGR_CNT", target),
-        "ingredients": split_multi(payload.get("ITEM_INGR_NAME"), "/"),
+        "ingredients": split_ingredients(payload.get("ITEM_INGR_NAME")),
         # 같은 코드가 두 번 적혀 있으면 PK (item_seq, edi_code)에 걸리므로 순서를 지키며 중복을 없앤다.
         "edi_codes": list(dict.fromkeys(split_multi(payload.get("EDI_CODE"), ","))),
     }
@@ -426,10 +427,42 @@ def upsert_permits(
         )
 
 
+def delete_orphans(conn: psycopg.Connection) -> dict[str, int]:
+    """어떤 허가에도 연결되지 않은 제품과 성분을 지운다.
+
+    upsert는 새 키를 넣을 뿐 옛 키를 지우지 않는다. 제품 키 규칙이나 성분 분해 규칙을
+    고치면 이전 규칙으로 만든 행이 아무 허가도 가리키지 않은 채 남는다.
+    이런 행은 기록할 문제가 아니라 치워야 할 잔여물이므로 변환 마지막에 정리한다.
+
+    Args:
+        conn (psycopg.Connection): 열린 DB 커넥션.
+
+    Returns:
+        dict[str, int]: 테이블별 지운 행 수.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM product pr
+             WHERE NOT EXISTS (SELECT 1 FROM permit p WHERE p.product_id = pr.product_id)
+            """
+        )
+        products = cur.rowcount
+        cur.execute(
+            """
+            DELETE FROM ingredient i
+             WHERE NOT EXISTS (SELECT 1 FROM permit_ingredient pi
+                                WHERE pi.ingredient_id = i.ingredient_id)
+            """
+        )
+        return {"product": products, "ingredient": cur.rowcount}
+
+
 def transform_permits(conn: psycopg.Connection, batch_id: uuid.UUID) -> tuple[int, IssueCollector]:
     """허가정보 배치 하나를 정규화 테이블에 반영한다.
 
     업체·성분·제품을 먼저 반영해야 허가 건이 그 대리키를 참조할 수 있다.
+    허가를 모두 반영한 뒤에야 어느 제품이 비었는지 알 수 있으므로 정리는 마지막에 한다.
 
     Args:
         conn (psycopg.Connection): 열린 DB 커넥션.
@@ -445,6 +478,10 @@ def transform_permits(conn: psycopg.Connection, batch_id: uuid.UUID) -> tuple[in
     ingredient_ids = upsert_ingredients(conn, rows)
     product_ids = upsert_products(conn, rows, company_ids, issues)
     upsert_permits(conn, rows, product_ids, ingredient_ids, batch_id)
+
+    orphans = delete_orphans(conn)
+    if any(orphans.values()):
+        logger.info("연결이 없는 행 정리 %s", orphans)
 
     return len(rows), issues
 
