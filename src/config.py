@@ -26,7 +26,7 @@ class Config:
         DB_PASSWORD (str | None): PostgreSQL 비밀번호.
         DB_NAME (str | None): PostgreSQL 데이터베이스명.
         DB_HOST (str): PostgreSQL 호스트. 미설정 시 localhost.
-        DB_PORT (str): PostgreSQL 포트. 미설정 시 5432.
+        DB_PORT (str): PostgreSQL 포트. 미설정 시 5433(docker-compose 호스트 포트).
     """
 
     API_KEY = os.getenv("MFDS_API_KEY")
@@ -40,7 +40,7 @@ class Config:
     # 호스트와 포트만 기본값을 두는 이유는 로컬 개발 환경이 고정적이기 때문이다.
     # 인증키나 DB명은 기본값을 주면 잘못된 대상에 붙어도 조용히 실행되므로 두지 않는다.
     DB_HOST = os.getenv("POSTGRES_HOST", "localhost")
-    DB_PORT = os.getenv("POSTGRES_PORT", "5432")
+    DB_PORT = os.getenv("POSTGRES_PORT", "5433")
 
     @classmethod
     def db_dsn(cls) -> str:

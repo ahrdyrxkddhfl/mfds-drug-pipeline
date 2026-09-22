@@ -100,13 +100,36 @@ def fetch_total_count(base_url: str) -> int:
 def extract_items(payload: dict) -> list[dict]:
     """응답에서 레코드 목록만 꺼낸다.
 
+    회수·판매중지 API는 레코드마다 {"item": {...}} 래퍼가 한 겹 더 있고,
+    허가정보 API는 레코드가 바로 나온다. 래퍼는 응답 형식일 뿐 데이터가 아니므로
+    여기서 벗겨내 소스와 관계없이 레코드 모양을 통일한다.
+    그래야 raw 테이블의 payload가 소스마다 같은 깊이를 가져 transform에서
+    분기할 필요가 없다.
+
     Args:
         payload (dict): fetch_page가 반환한 응답 전체.
-    
+
     Returns:
         list[dict]: 레코드 목록. 해당 페이지에 데이터가 없으면 빈 리스트.
     """
-    return payload.get("body", {}).get("items", [])
+    items = payload.get("body", {}).get("items") or []
+    return [_unwrap(item) for item in items]
+
+def _unwrap(item: dict) -> dict:
+    """레코드를 감싼 item 래퍼를 제거한다.
+
+    키가 item 하나뿐일 때만 벗긴다. 실제 필드명에 item이 섞인 레코드를
+    잘못 벗기지 않기 위해서다.
+
+    Args:
+        item (dict): API가 반환한 레코드 하나.
+
+    Returns:
+        dict: 래퍼가 있으면 내부 레코드, 없으면 입력 그대로.
+    """
+    if set(item) == {"item"} and isinstance(item["item"], dict):
+        return item["item"]
+    return item
 
 # ================
 # 실행부

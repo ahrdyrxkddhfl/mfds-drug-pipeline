@@ -1,6 +1,7 @@
 -- ============================================================
 -- mfds-drug-pipeline 스키마
--- 데이터 출처: 식품의약품안전처 의약품 제품 허가정보 (공공데이터포털)
+-- 데이터 출처: 식품의약품안전처 의약품 제품 허가정보, 의약품 회수·판매중지 정보
+--            (공공데이터포털)
 -- ============================================================
 
 
@@ -9,8 +10,15 @@
 -- API 응답을 가공 없이 보관. 정제 로직 수정 시 재처리용 안전망.
 -- ============================================================
 
-CREATE TABLE raw_permit (
+-- 원본 레코드
+-- 소스별로 테이블을 나누지 않고 source 컬럼으로 구분한다.
+--   - 소스마다 필드 구성이 달라도 JSONB가 흡수하므로 DDL이 바뀌지 않음
+--   - 소스가 늘어도 테이블 추가 없이 source 값만 늘어남
+--   - 적재 코드가 테이블명을 문자열로 조립할 필요가 없음
+-- 배치마다 새 행으로 쌓이며, transform은 소스별 최신 성공 배치만 읽는다.
+CREATE TABLE raw_record (
     id           BIGSERIAL PRIMARY KEY,
+    source       VARCHAR(30) NOT NULL,                -- permit / recall
     payload      JSONB NOT NULL,                      -- API 응답 원본
     fetched_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     batch_id     UUID NOT NULL,                       -- 수집 회차 식별자
@@ -150,5 +158,5 @@ CREATE INDEX idx_permit_product      ON permit(product_id);
 CREATE INDEX idx_permit_permit_date  ON permit(permit_date);
 CREATE INDEX idx_permit_cancel_name  ON permit(cancel_name);
 CREATE INDEX idx_product_company     ON product(company_id);
-CREATE INDEX idx_raw_permit_batch    ON raw_permit(batch_id);
+CREATE INDEX idx_raw_record_batch    ON raw_record(source, batch_id);
 CREATE INDEX idx_validation_batch    ON validation_log(batch_id, rule_code);

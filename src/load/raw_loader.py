@@ -13,7 +13,9 @@ from datetime import datetime, timezone
 
 import psycopg
 
+from src.config import config
 from src.extract.api_client import PAGE_SIZE, extract_items, fetch_page, fetch_total_count
+from src.load.db import get_connection
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +75,7 @@ def finish_batch(
 
 def save_page(
         conn: psycopg.Connection,
+        source: str,
         batch_id: uuid.UUID,
         page_no: int,
         items: list[dict],
@@ -84,6 +87,7 @@ def save_page(
 
     Args:
         conn (psycopg.Connection): 열린 DB 커넥션.
+        source (str): 데이터 소스 구분자. permit 또는 recall.
         batch_id (uuid.UUID): 소속 배치 식별자.
         page_no (int): 원본 페이지 번호. 수집 누락 추적에 사용한다.
         items (list[dict]): 해당 페이지의 레코드 목록.
@@ -97,10 +101,13 @@ def save_page(
     with conn.cursor() as cur:
         cur.executemany(
             """
-            INSERT INTO raw_permit (payload, batch_id, page_no)
-            VALUES (%s, %s, %s)
+            INSERT INTO raw_record (source, payload, batch_id, page_no)
+            VALUES (%s, %s, %s, %s)
             """,
-            [(json.dumps(item, ensure_ascii=False), batch_id, page_no) for item in items],
+            [
+                (source, json.dumps(item, ensure_ascii=False), batch_id, page_no)
+                for item in items
+            ],
         )
     return len(items)
 
@@ -142,7 +149,7 @@ def ingest_all(
     try:
         for page_no in range(1, total_pages + 1):
             payload = fetch_page(base_url, page_no)
-            fetched += save_page(conn, batch_id, page_no, extract_items(payload))
+            fetched += save_page(conn, source, batch_id, page_no, extract_items(payload))
 
             if page_no % 50 == 0 or page_no == total_pages:
                 logger.info("진행 %d/%d (%d건)", page_no, total_pages, fetched)
@@ -160,3 +167,21 @@ def ingest_all(
         logger.warning("건수 불일치: 예상 %d, 실제 %d", total_count, fetched)
 
     return batch_id
+
+
+# ================
+# 실행부
+# ================
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    config.validate()
+
+    sources = {"permit": config.PERMIT_API_URL, "recall": config.RECALL_API_URL}
+
+    for source, url in sources.items():
+        if not url:
+            logger.warning("요청주소 미설정으로 건너뜀 (source=%s)", source)
+            continue
+        with get_connection() as conn, get_connection(autocommit=True) as log_conn:
+            ingest_all(conn, log_conn, url, source)
