@@ -79,18 +79,21 @@ CREATE TABLE product (
 
 -- 허가 건
 -- 원본 API 1행 = 이 테이블 1행
+-- PRDLST_STDR_CODE는 전 건이 ITEM_SEQ와 같은 값이라 저장하지 않는다.
+-- 앞으로도 같다는 보장은 없으므로 동일성은 검증 규칙으로 매 배치 확인한다.
 CREATE TABLE permit (
     item_seq         VARCHAR(20) PRIMARY KEY,
     product_id       BIGINT REFERENCES product(product_id),
     item_name_raw    TEXT NOT NULL,                   -- 원본 품목명 (대조용)
     permit_date      DATE,
     cancel_date      DATE,                            -- 취하/만료일
-    cancel_name      VARCHAR(50),                     -- 정상/취하/유효기간만료/폐업
+    cancel_name      VARCHAR(50),                     -- 정상/유효기간만료/취하/폐업/행정(취소)/취소
+                                                      -- 행정(취소)와 취소는 같은 뜻인지 근거가 없어 원본 값 유지
     induty           TEXT,                            -- 업종 (분류 체계 혼재)
     prduct_type      TEXT,                            -- 약효 분류
     permit_kind_code VARCHAR(20),                     -- 허가/신고
-    prdlst_stdr_code VARCHAR(20),                     -- ITEM_SEQ와 동일 여부 확인 필요
     prduct_prmisn_no VARCHAR(20),
+    ingr_cnt_raw     INT,                             -- 원본 성분 수. 분해 결과와 대조하는 검증용
     batch_id         UUID,
     created_at       TIMESTAMPTZ DEFAULT now(),
     updated_at       TIMESTAMPTZ DEFAULT now()
@@ -120,6 +123,33 @@ CREATE TABLE permit_edi_code (
 );
 
 
+-- 회수·판매중지 건
+-- 원천에 회수 건 식별자가 없어 (품목, 회수일, 사유)를 자연키로 사용한다.
+-- 같은 자연키로 동일 페이지에 중복 행이 오는 사례가 있다(958건 중 4건).
+-- 목록 API에 없는 제조번호로 구분되는 별개 행일 수 있어, 1행으로 합치되 원 행 수를 보존한다.
+-- item_seq는 permit에 FK를 걸지 않는다. 회수 API는 허가정보 API보다 품목 범위가 넓어
+-- 약 44%가 허가정보에 없다. FK를 걸면 이 행들이 적재되지 않으므로 연결 여부는 조회 시 판단한다.
+CREATE TABLE recall (
+    recall_id            BIGSERIAL PRIMARY KEY,
+    item_seq             VARCHAR(20) NOT NULL,
+    recall_command_date  DATE NOT NULL,               -- RECALL_COMMAND_DATE. 항상 존재
+    rtrvl_cmmnd_date     DATE,                        -- RTRVL_CMMND_DT. 14자리 일시 중 날짜만 사용
+    -- 포털 설명상 두 날짜는 승인일자·회수명령일자에 해당하나, 명세에 필드별 설명이 없어
+    -- 의미를 단정하지 않고 원본 필드명을 유지한다.
+    reason               TEXT NOT NULL,               -- RTRVL_RESN
+    is_enforced          BOOLEAN NOT NULL,            -- ENFRC_YN
+    product_name_raw     TEXT NOT NULL,
+    company_name_raw     TEXT,
+    bizrno               VARCHAR(20),
+    std_codes            TEXT[],                      -- STD_CD 콤마 분해. 빈 값은 NULL
+    source_row_count     INT NOT NULL DEFAULT 1,      -- 합쳐진 원본 행 수
+    batch_id             UUID,
+    created_at           TIMESTAMPTZ DEFAULT now(),
+    updated_at           TIMESTAMPTZ DEFAULT now(),
+    UNIQUE (item_seq, recall_command_date, reason)
+);
+
+
 -- ============================================================
 -- 운영 로그
 -- ============================================================
@@ -143,7 +173,7 @@ CREATE TABLE validation_log (
     id           BIGSERIAL PRIMARY KEY,
     batch_id     UUID,
     rule_code    VARCHAR(50) NOT NULL,                -- 검증 규칙 식별자
-    severity     VARCHAR(10) NOT NULL,                -- error / warning
+    severity     VARCHAR(10) NOT NULL,                -- error / warning / info
     target_key   TEXT,                                -- 대상 레코드 식별자
     detail       JSONB,                               -- 탐지 상세
     detected_at  TIMESTAMPTZ DEFAULT now()
@@ -158,5 +188,6 @@ CREATE INDEX idx_permit_product      ON permit(product_id);
 CREATE INDEX idx_permit_permit_date  ON permit(permit_date);
 CREATE INDEX idx_permit_cancel_name  ON permit(cancel_name);
 CREATE INDEX idx_product_company     ON product(company_id);
+CREATE INDEX idx_recall_item_seq     ON recall(item_seq);
 CREATE INDEX idx_raw_record_batch    ON raw_record(source, batch_id);
 CREATE INDEX idx_validation_batch    ON validation_log(batch_id, rule_code);
