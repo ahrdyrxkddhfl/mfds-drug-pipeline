@@ -297,9 +297,14 @@ def upsert_products(
 ) -> dict[str, int]:
     """허가를 정규화 키로 묶어 제품을 반영한다.
 
-    같은 키로 묶인 허가끼리 성분 구성이나 전문/일반 구분이 다르면
-    정말 같은 제품인지 자동으로 판단할 수 없다. 이때 억지로 확정하지 않고
-    review_needed로 표시해 사람이 확인하게 남긴다.
+    같은 키로 묶인 허가끼리 다음 중 하나에 해당하면 정말 같은 제품인지
+    자동으로 판단할 수 없다. 이때 억지로 확정하지 않고 review_needed로 표시해
+    사람이 확인하게 남긴다.
+
+        - 성분 구성이 다르다.
+        - 전문/일반 구분이 다르다.
+        - 정상 상태인 허가가 둘 이상이다. 갱신이라면 이전 허가는 만료나 취하로
+          끝나 있어야 한다. 둘 다 살아 있다면 이름만 같은 별개 품목일 수 있다.
 
     Args:
         conn (psycopg.Connection): 열린 DB 커넥션.
@@ -319,13 +324,15 @@ def upsert_products(
         rep = _latest_first(members)[0]
         ingredient_sets = {tuple(sorted(set(m["ingredients"]))) for m in members}
         spclty_values = {m["spclty_pblc"] for m in members}
-        review_needed = len(ingredient_sets) > 1 or len(spclty_values) > 1
+        active = [m["item_seq"] for m in members if m["cancel_name"] == "정상"]
+        review_needed = len(ingredient_sets) > 1 or len(spclty_values) > 1 or len(active) > 1
 
         if review_needed:
             issues.add("PRODUCT_REVIEW_NEEDED", "warning", key, {
                 "item_seqs": sorted(m["item_seq"] for m in members),
                 "ingredient_variants": len(ingredient_sets),
                 "spclty_variants": sorted(v or "" for v in spclty_values),
+                "active_permits": sorted(active),
             })
 
         values.append((key, rep["name_ko"], rep["name_en"], company_ids[rep["bizrno"]],

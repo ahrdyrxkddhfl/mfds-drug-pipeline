@@ -11,11 +11,8 @@ from datetime import date
 _WHITESPACE = re.compile(r"\s+")
 _DATE_DIGITS = re.compile(r"[0-9]{8}(?:[0-9]{6})?")
 
-# 괄호 안에 있어도 별개 제품으로 봐야 하는 용도 구분자.
-# 실데이터에서 확인한 표기만 넣는다. 새 표기가 발견되면 여기에 추가한다.
-USAGE_MARKERS = ("수출용",)
-
 # 다른 이름을 병기한 괄호. 제품을 구분하는 정보가 아니라 별칭이므로 키에서 뺀다.
+# 키에서 빼는 괄호는 이것뿐이다. 그 밖의 괄호는 모두 남긴다(_keeps_group 참고).
 ALIAS_PREFIXES = ("수출명",)
 
 # 같은 단위를 다르게 적은 표기. 왼쪽을 오른쪽으로 통일한다.
@@ -165,10 +162,15 @@ def split_parentheses(text: str) -> tuple[str, list[str]]:
 def _keeps_group(group: str) -> bool:
     """괄호 내용을 제품 키에 남길지 판단한다.
 
+    별칭(수출명)만 버리고 나머지는 모두 남긴다.
     기준은 합쳐지지 말아야 할 제품이 합쳐지는 일을 막는 것이다.
     잘못 쪼개진 제품은 나중에 합칠 수 있지만, 잘못 합쳐진 제품은
     어떤 허가가 어느 제품이었는지 되돌릴 근거가 남지 않는다.
-    그래서 판단이 애매하면 남기는 쪽을 택한다.
+
+    처음에는 용도 구분자(수출용)와 숫자가 든 괄호만 남기고 성분 나열 괄호는 버렸다.
+    그런데 실데이터에서 (사향대체물질함유), (바이알)처럼 숫자도 용도 구분자도 없지만
+    처방이나 용기가 다른 제품을 가르는 괄호가 확인됐다. 버려도 되는 괄호를
+    목록으로 관리하는 쪽이 남겨야 하는 괄호를 목록으로 관리하는 쪽보다 안전하다.
 
     Args:
         group (str): 괄호 안 내용.
@@ -177,12 +179,7 @@ def _keeps_group(group: str) -> bool:
         bool: 키에 남겨야 하면 True.
     """
     stripped = group.strip()
-    if any(stripped.startswith(prefix) for prefix in ALIAS_PREFIXES):
-        return False
-    if any(marker in stripped for marker in USAGE_MARKERS):
-        return True
-    # 숫자가 있으면 함량일 수 있다. 함량이 다르면 별개 제품이므로 남긴다.
-    return any(ch.isdigit() for ch in stripped)
+    return not any(stripped.startswith(prefix) for prefix in ALIAS_PREFIXES)
 
 
 def normalize_product_key(item_name: str, bizrno: str) -> str:
@@ -193,8 +190,7 @@ def normalize_product_key(item_name: str, bizrno: str) -> str:
 
     처리 순서는 다음과 같다.
         1. NFKC 정규화로 호환 문자를 통일한다(㎍ → μg, 전각 괄호 → 반각 괄호).
-        2. 괄호를 분리해 별칭(수출명)과 성분 나열은 버리고,
-           용도 구분자와 숫자가 든 내용은 남긴다.
+        2. 괄호를 분리해 별칭(수출명)은 버리고 나머지는 남긴다.
         3. 표기가 갈리는 단위 이름을 통일한다.
         4. 공백을 모두 지우고 영문을 소문자로 바꾼다.
 
