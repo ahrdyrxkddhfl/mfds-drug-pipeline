@@ -169,6 +169,31 @@ def ingest_all(
     return batch_id
 
 
+def ingest_sources() -> dict[str, uuid.UUID]:
+    """설정된 모든 소스를 차례로 수집한다.
+
+    소스마다 커넥션을 따로 연다. 허가 수집이 끝나 커밋된 뒤에 회수 수집이 실패해도
+    허가 적재분은 남아야 하기 때문이다. 두 소스는 서로의 결과에 의존하지 않는다.
+
+    Returns:
+        dict[str, uuid.UUID]: 소스별로 새로 만든 배치 식별자. 요청주소가 없어 건너뛴 소스는 빠진다.
+
+    Raises:
+        Exception: 수집 중 발생한 예외. 이력은 기록된 상태로 전파된다.
+    """
+    sources = {"permit": config.PERMIT_API_URL, "recall": config.RECALL_API_URL}
+    batches = {}
+
+    for source, url in sources.items():
+        if not url:
+            logger.warning("요청주소 미설정으로 건너뜀 (source=%s)", source)
+            continue
+        with get_connection() as conn, get_connection(autocommit=True) as log_conn:
+            batches[source] = ingest_all(conn, log_conn, url, source)
+
+    return batches
+
+
 # ================
 # 실행부
 # ================
@@ -176,12 +201,4 @@ def ingest_all(
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     config.validate()
-
-    sources = {"permit": config.PERMIT_API_URL, "recall": config.RECALL_API_URL}
-
-    for source, url in sources.items():
-        if not url:
-            logger.warning("요청주소 미설정으로 건너뜀 (source=%s)", source)
-            continue
-        with get_connection() as conn, get_connection(autocommit=True) as log_conn:
-            ingest_all(conn, log_conn, url, source)
+    print(ingest_sources())
